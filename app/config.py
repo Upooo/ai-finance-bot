@@ -18,6 +18,19 @@ AI_MODEL = "openai/gpt-oss-120b"
 # Database file path
 DB_PATH = os.getenv("DB_PATH", "data/idol.db")
 
+# Owner and admin IDs
+OWNER_ID = 7714463332
+OWNER_USERNAME = "nathanidol"
+OWNER_NAME = "Nathan Idol"
+
+# Admin IDs (can toggle bot modes like owner)
+ADMIN_IDS = [
+    OWNER_ID,
+    6642010805,
+    7295015682,
+    8432781062,
+]
+
 # Dismiss phrases — bot stops following conversation
 DISMISS_PHRASES = [
     "ga ngomong sama lu",

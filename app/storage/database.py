@@ -48,6 +48,7 @@ async def init_db():
                 chat_id INTEGER PRIMARY KEY,
                 strict_mode INTEGER DEFAULT 0,
                 chat_mode INTEGER DEFAULT 0,
+                nimbrung_mode INTEGER DEFAULT 0,
                 welcome_msg TEXT
             )
         """)
@@ -58,6 +59,13 @@ async def init_db():
                 topic_hint TEXT
             )
         """)
+        # Migration: add nimbrung_mode if missing
+        try:
+            await db.execute(
+                "ALTER TABLE group_settings ADD COLUMN nimbrung_mode INTEGER DEFAULT 0"
+            )
+        except Exception:
+            pass  # Column already exists
         await db.commit()
     finally:
         await db.close()

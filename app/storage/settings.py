@@ -59,7 +59,35 @@ async def set_chat_mode(chat_id: int, enabled: bool):
         await db.close()
 
 
-# ── Active conversation tracking ──
+async def get_nimbrung_mode(chat_id: int) -> bool:
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT nimbrung_mode FROM group_settings WHERE chat_id = ?",
+            (chat_id,),
+        )
+        row = await cursor.fetchone()
+        return bool(row[0]) if row else False
+    finally:
+        await db.close()
+
+
+async def set_nimbrung_mode(chat_id: int, enabled: bool):
+    db = await get_db()
+    try:
+        await db.execute(
+            """INSERT INTO group_settings (chat_id, nimbrung_mode)
+               VALUES (?, ?)
+               ON CONFLICT(chat_id)
+               DO UPDATE SET nimbrung_mode = excluded.nimbrung_mode""",
+            (chat_id, int(enabled)),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+# -- Active conversation tracking --
 
 CONVERSATION_TIMEOUT = 300  # 5 minutes
 
