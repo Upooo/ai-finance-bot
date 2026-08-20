@@ -58,15 +58,35 @@ ai = AIAgent(GROQ_API_KEY)
 # Helpers
 # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
-def escape_html(text: str) -> str:
+def sanitize_html(text: str) -> str:
+    """Light sanitization: only fix unclosed tags that would break Telegram.
+    We do NOT escape &<> because the AI is instructed to output valid HTML."""
     if not text:
         return ""
-    return (
-        text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
+    # Telegram supports: b, i, u, s, code, pre, a, tg-spoiler, blockquote
+    # If AI accidentally outputs unsupported tags, strip them
+    import re as _re
+    allowed = {'b', 'i', 'u', 's', 'code', 'pre', 'a', 'tg-spoiler', 'blockquote', 'em', 'strong'}
+    def _replace(m):
+        tag = m.group(2).lower().split()[0]  # get tag name
+        if tag in allowed:
+            return m.group(0)  # keep
+        return ''  # strip unsupported tag
+    result = _re.sub(r'(<(/?)([^>]+)>)', lambda m: _check_tag(m, allowed), text)
+    return result
+
+
+def _check_tag(m, allowed):
+    import re as _re
+    full = m.group(0)
+    # Extract tag name
+    tag_match = _re.match(r'</?([a-zA-Z][a-zA-Z0-9-]*)', full)
+    if not tag_match:
+        return full
+    tag = tag_match.group(1).lower()
+    if tag in allowed:
+        return full
+    return ''  # strip unsupported
 
 
 async def execute_tool(
@@ -268,8 +288,9 @@ async def welcome_handler(message: Message):
         if user.is_bot:
             continue
         name = user.full_name or "User"
+        safe_name = name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         await message.answer(
-            f"\U0001f44b Selamat datang <b>{escape_html(name)}</b>!\n"
+            f"\U0001f44b Selamat datang <b>{safe_name}</b>!\n"
             f"Salam kenal, ada yang bisa Idol bantu?",
             parse_mode="HTML",
         )
@@ -326,8 +347,9 @@ async def message_handler(message: Message):
                 count = await add_warning(
                     chat_id, message.from_user.id, mod["reason"],
                 )
+                safe_name = user_name.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 warning = (
-                    f"\u26a0\ufe0f {user_name}, warning ke-{count}! "
+                    f"\u26a0\ufe0f <b>{safe_name}</b>, warning ke-{count}! "
                     f"({mod['category']}: {mod['reason']})"
                 )
                 if count >= 5:
@@ -357,7 +379,7 @@ async def message_handler(message: Message):
                         warning += "\n\U0001f507 Auto-mute 10 menit."
                     except Exception:
                         pass
-                await message.answer(warning)
+                await message.answer(warning, parse_mode="HTML")
 
                 await add_message(
                     chat_id=chat_id, role="user",
@@ -374,19 +396,17 @@ async def message_handler(message: Message):
         if not should_reply:
             conv_active = await is_conversation_active(chat_id)
             if conv_active:
-                should_reply = True  # Bot stays in conversation
+                should_reply = True
 
         # Check chat mode (proactive nimbrung)
         if not should_reply:
             chat_mode_on = await get_chat_mode(chat_id)
             if chat_mode_on:
-                # Ask AI if it should join this conversation
                 mod_result = await ai.check_should_join(message.text)
                 if mod_result.get("should_join", False):
                     should_reply = True
 
         if not should_reply:
-            # Save to history but don't respond
             await add_message(
                 chat_id=chat_id, role="user",
                 content=message.text,
@@ -439,18 +459,23 @@ async def message_handler(message: Message):
         if is_group:
             await mark_active(chat_id, topic_hint=text[:100])
 
-        # Send response (split if too long)
+        # Send response (AI outputs HTML directly)
         if response:
-            if len(response) > 4000:
-                for i in range(0, len(response), 4000):
-                    chunk = response[i : i + 4000]
-                    await message.answer(
-                        escape_html(chunk), parse_mode="HTML",
-                    )
+            clean = sanitize_html(response)
+            if len(clean) > 4000:
+                for i in range(0, len(clean), 4000):
+                    chunk = clean[i : i + 4000]
+                    try:
+                        await message.answer(chunk, parse_mode="HTML")
+                    except Exception:
+                        # Fallback: send without parse mode
+                        await message.answer(chunk)
             else:
-                await message.answer(
-                    escape_html(response), parse_mode="HTML",
-                )
+                try:
+                    await message.answer(clean, parse_mode="HTML")
+                except Exception:
+                    # Fallback: send without parse mode if HTML is broken
+                    await message.answer(response)
 
     except Exception as e:
         print(f"\n{'=' * 40}", flush=True)
