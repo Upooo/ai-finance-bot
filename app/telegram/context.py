@@ -31,13 +31,11 @@ async def build_context(message: Message) -> dict:
 
     if message.reply_to_message:
         replied = message.reply_to_message
-
         reply_user = replied.from_user
 
         context["reply"] = {
             "message_id": replied.message_id,
             "text": replied.text,
-
             "user": None,
         }
 

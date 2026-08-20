@@ -2,14 +2,24 @@ import asyncio
 import os
 import traceback
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 from dotenv import load_dotenv
 
-from app.telegram.context import build_context
 from app.ai.agent import AIAgent
+from app.telegram.context import build_context
+from app.telegram.triggers import should_respond, clean_trigger
+from app.telegram.typing import TypingManager
 from app.telegram.permissions import can_manage
+
+from app.storage.database import init_db
+from app.storage.memory import add_message
+from app.storage.warnings import (
+    add_warning,
+    get_count,
+)
+from app.storage.settings import get_strict_mode, set_strict_mode
 
 from app.telegram.management import (
     get_group_info,
@@ -22,37 +32,29 @@ from app.telegram.management import (
     unmute_user,
     delete_message,
     create_invite_link,
+    pin_message,
+    unpin_message,
+    set_chat_title,
+    set_chat_description,
 )
 
 
 load_dotenv()
 
-
-BOT_TOKEN = os.getenv(
-    "BOT_TOKEN"
-)
-
-GROQ_API_KEY = os.getenv(
-    "GROQ_API_KEY"
-)
-
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 dp = Dispatcher()
+ai = AIAgent(GROQ_API_KEY)
 
-ai = AIAgent(
-    GROQ_API_KEY
-)
 
+# ──────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────
 
 def escape_html(text: str) -> str:
-    """
-    Escape karakter HTML agar response AI
-    tidak membuat Telegram gagal parse.
-    """
-
     if not text:
         return ""
-
     return (
         text
         .replace("&", "&amp;")
@@ -67,193 +69,208 @@ async def execute_tool(
     tool_name: str,
     args: dict,
 ):
-
     chat_id = message.chat.id
     user_id = message.from_user.id
 
-    # =====================================
-    # READ-ONLY TOOLS
-    # =====================================
-
+    # ── Read-only tools ──
     if tool_name == "get_group_info":
-
-        return await get_group_info(
-            bot=bot,
-            chat_id=chat_id,
-        )
-
+        return await get_group_info(bot=bot, chat_id=chat_id)
     if tool_name == "get_group_admins":
+        return await get_group_admins(bot=bot, chat_id=chat_id)
 
-        return await get_group_admins(
-            bot=bot,
-            chat_id=chat_id,
+    # ── Settings tools (admin-only) ──
+    if tool_name == "toggle_strict_mode":
+        allowed = await can_manage(
+            bot=bot, chat_id=chat_id,
+            user_id=user_id, action="toggle_strict_mode",
         )
+        if not allowed:
+            return {"success": False, "error": "PERMISSION_DENIED"}
+        enabled = args.get("enabled", False)
+        await set_strict_mode(chat_id, enabled)
+        return {"success": True, "strict_mode": enabled}
 
-    # =====================================
-    # PERMISSION CHECK
-    # =====================================
+    # ── Warning tools ──
+    if tool_name == "warn_user":
+        target_id = args.get("user_id")
+        if not target_id:
+            return {"success": False, "error": "Missing user_id"}
+        reason = args.get("reason", "Pelanggaran aturan group")
+        count = await add_warning(chat_id, target_id, reason)
+        result = {
+            "success": True,
+            "user_id": target_id,
+            "warning_count": count,
+            "reason": reason,
+        }
+        if count >= 3:
+            duration = 10 if count < 5 else 60
+            try:
+                await mute_user(
+                    bot=bot, chat_id=chat_id,
+                    user_id=target_id,
+                    duration_minutes=duration,
+                )
+                result["auto_muted"] = True
+                result["mute_duration_minutes"] = duration
+            except Exception:
+                result["auto_muted"] = False
+        return result
 
+    if tool_name == "get_warnings":
+        target_id = args.get("user_id")
+        if not target_id:
+            return {"success": False, "error": "Missing user_id"}
+        count = await get_count(chat_id, target_id)
+        return {
+            "success": True,
+            "user_id": target_id,
+            "warning_count": count,
+        }
+
+    # ── Permission check for management tools ──
     allowed = await can_manage(
-        bot=bot,
-        chat_id=chat_id,
-        user_id=user_id,
-        action=tool_name,
+        bot=bot, chat_id=chat_id,
+        user_id=user_id, action=tool_name,
     )
-
     if not allowed:
-
         return {
             "success": False,
             "error": "PERMISSION_DENIED",
-            "message": (
-                "User yang meminta tindakan "
-                "tidak mempunyai permission "
-                "yang cukup."
-            ),
+            "message": "User tidak punya permission yang cukup.",
         }
 
-    # =====================================
-    # PROMOTE
-    # =====================================
+    # ── Auto-fill user_id from reply target ──
+    target_tools = [
+        "promote_user", "demote_user",
+        "ban_user", "unban_user",
+        "mute_user", "unmute_user",
+    ]
+    if tool_name in target_tools and "user_id" not in args:
+        if (
+            message.reply_to_message
+            and message.reply_to_message.from_user
+        ):
+            args["user_id"] = message.reply_to_message.from_user.id
+        else:
+            return {
+                "success": False,
+                "error": "Missing user_id. Reply ke pesan user target.",
+            }
 
-    if tool_name == "promote_user":
+    # ── Auto-fill message_id from reply target ──
+    if tool_name == "delete_message" and "message_id" not in args:
+        if message.reply_to_message:
+            args["message_id"] = message.reply_to_message.message_id
+        else:
+            return {
+                "success": False,
+                "error": "Missing message_id. Reply ke pesan yang mau dihapus.",
+            }
+    if tool_name == "pin_message" and "message_id" not in args:
+        if message.reply_to_message:
+            args["message_id"] = message.reply_to_message.message_id
+        else:
+            return {
+                "success": False,
+                "error": "Missing message_id. Reply ke pesan yang mau di-pin.",
+            }
 
-        return await promote_user(
-            bot=bot,
-            chat_id=chat_id,
-            user_id=args["user_id"],
-        )
+    # ── Execute management tool ──
+    try:
+        dispatch = {
+            "promote_user": lambda: promote_user(
+                bot=bot, chat_id=chat_id, user_id=args["user_id"],
+            ),
+            "demote_user": lambda: demote_user(
+                bot=bot, chat_id=chat_id, user_id=args["user_id"],
+            ),
+            "ban_user": lambda: ban_user(
+                bot=bot, chat_id=chat_id, user_id=args["user_id"],
+            ),
+            "unban_user": lambda: unban_user(
+                bot=bot, chat_id=chat_id, user_id=args["user_id"],
+            ),
+            "mute_user": lambda: mute_user(
+                bot=bot, chat_id=chat_id, user_id=args["user_id"],
+                duration_minutes=args.get("duration_minutes", 10),
+            ),
+            "unmute_user": lambda: unmute_user(
+                bot=bot, chat_id=chat_id, user_id=args["user_id"],
+            ),
+            "delete_message": lambda: delete_message(
+                bot=bot, chat_id=chat_id, message_id=args["message_id"],
+            ),
+            "create_invite_link": lambda: create_invite_link(
+                bot=bot, chat_id=chat_id,
+            ),
+            "pin_message": lambda: pin_message(
+                bot=bot, chat_id=chat_id, message_id=args["message_id"],
+            ),
+            "unpin_message": lambda: unpin_message(
+                bot=bot, chat_id=chat_id,
+                message_id=args.get("message_id"),
+            ),
+            "set_chat_title": lambda: set_chat_title(
+                bot=bot, chat_id=chat_id, title=args["title"],
+            ),
+            "set_chat_description": lambda: set_chat_description(
+                bot=bot, chat_id=chat_id,
+                description=args["description"],
+            ),
+        }
+        fn = dispatch.get(tool_name)
+        if fn:
+            return await fn()
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
-    # =====================================
-    # DEMOTE
-    # =====================================
-
-    if tool_name == "demote_user":
-
-        return await demote_user(
-            bot=bot,
-            chat_id=chat_id,
-            user_id=args["user_id"],
-        )
-
-    # =====================================
-    # BAN
-    # =====================================
-
-    if tool_name == "ban_user":
-
-        return await ban_user(
-            bot=bot,
-            chat_id=chat_id,
-            user_id=args["user_id"],
-        )
-
-    # =====================================
-    # UNBAN
-    # =====================================
-
-    if tool_name == "unban_user":
-
-        return await unban_user(
-            bot=bot,
-            chat_id=chat_id,
-            user_id=args["user_id"],
-        )
-
-    # =====================================
-    # MUTE
-    # =====================================
-
-    if tool_name == "mute_user":
-
-        return await mute_user(
-            bot=bot,
-            chat_id=chat_id,
-            user_id=args["user_id"],
-        )
-
-    # =====================================
-    # UNMUTE
-    # =====================================
-
-    if tool_name == "unmute_user":
-
-        return await unmute_user(
-            bot=bot,
-            chat_id=chat_id,
-            user_id=args["user_id"],
-        )
-
-    # =====================================
-    # DELETE MESSAGE
-    # =====================================
-
-    if tool_name == "delete_message":
-
-        return await delete_message(
-            bot=bot,
-            chat_id=chat_id,
-            message_id=args["message_id"],
-        )
-
-    # =====================================
-    # INVITE LINK
-    # =====================================
-
-    if tool_name == "create_invite_link":
-
-        return await create_invite_link(
-            bot=bot,
-            chat_id=chat_id,
-        )
-
-    return {
-        "success": False,
-        "error": "UNKNOWN_TOOL",
-    }
+    return {"success": False, "error": "UNKNOWN_TOOL"}
 
 
-@dp.message(
-    CommandStart()
-)
-async def start_handler(
-    message: Message,
-):
+# ──────────────────────────────────────
+# Handlers
+# ──────────────────────────────────────
 
+@dp.message(CommandStart())
+async def start_handler(message: Message):
     await message.answer(
-        "🤖 <b>Idol AI aktif.</b>\n\n"
-        "Private chat + Group Assistant.",
+        "\U0001f916 <b>Idol AI aktif.</b>\n\n"
+        "Private chat \u2192 ngobrol santai.\n"
+        "Group \u2192 assistant + moderator.\n\n"
+        "Panggil aja \u201cidol\u201d di group!",
         parse_mode="HTML",
     )
 
 
-@dp.message()
-async def message_handler(
-    message: Message,
-):
+@dp.message(F.new_chat_members)
+async def welcome_handler(message: Message):
+    for user in message.new_chat_members:
+        if user.is_bot:
+            continue
+        name = user.full_name or "User"
+        await message.answer(
+            f"\U0001f44b Selamat datang <b>{escape_html(name)}</b>!\n"
+            f"Salam kenal, ada yang bisa Idol bantu?",
+            parse_mode="HTML",
+        )
 
+
+@dp.message()
+async def message_handler(message: Message):
     if not message.text:
         return
 
-    context = await build_context(
-        message
-    )
+    bot_info = await message.bot.get_me()
+    chat_id = message.chat.id
+    is_group = message.chat.type in ["group", "supergroup"]
 
-    # =====================================
+    # ═══════════════════════════════
     # GROUP FILTER
-    # =====================================
-
-    if message.chat.type in [
-        "group",
-        "supergroup",
-    ]:
-
-        bot_info = await message.bot.get_me()
-
+    # ═══════════════════════════════
+    if is_group:
         mentioned = False
-
         if bot_info.username:
-
             mentioned = (
                 f"@{bot_info.username.lower()}"
                 in message.text.lower()
@@ -262,221 +279,155 @@ async def message_handler(
         replied_to_bot = (
             message.reply_to_message
             and message.reply_to_message.from_user
-            and (
-                message.reply_to_message
-                .from_user.id
-                == bot_info.id
-            )
+            and message.reply_to_message.from_user.id == bot_info.id
         )
 
-        if not mentioned and not replied_to_bot:
+        triggered = should_respond(message.text, bot_info.username)
+
+        # ── Moderation (strict mode) ──
+        strict = await get_strict_mode(chat_id)
+        if strict and not mentioned and not replied_to_bot and not triggered:
+            mod = await ai.check_moderation(message.text)
+            if (
+                mod["category"] != "CLEAN"
+                and mod["confidence"] > 0.7
+            ):
+                user_name = message.from_user.full_name or "User"
+                count = await add_warning(
+                    chat_id, message.from_user.id, mod["reason"],
+                )
+                warning = (
+                    f"\u26a0\ufe0f {user_name}, warning ke-{count}! "
+                    f"({mod['category']}: {mod['reason']})"
+                )
+                if count >= 5:
+                    try:
+                        await mute_user(
+                            bot=message.bot, chat_id=chat_id,
+                            user_id=message.from_user.id,
+                            duration_minutes=60,
+                        )
+                        warning += "\n\U0001f507 Auto-mute 1 jam."
+                    except Exception:
+                        pass
+                    try:
+                        await delete_message(
+                            bot=message.bot, chat_id=chat_id,
+                            message_id=message.message_id,
+                        )
+                    except Exception:
+                        pass
+                elif count >= 3:
+                    try:
+                        await mute_user(
+                            bot=message.bot, chat_id=chat_id,
+                            user_id=message.from_user.id,
+                            duration_minutes=10,
+                        )
+                        warning += "\n\U0001f507 Auto-mute 10 menit."
+                    except Exception:
+                        pass
+                await message.answer(warning)
+
+            # Save to history but don't respond
+            await add_message(
+                chat_id=chat_id, role="user",
+                content=message.text,
+                user_id=message.from_user.id,
+                user_name=message.from_user.full_name,
+            )
             return
 
-        text = message.text
+        # Not addressed → save history, don't respond
+        if not mentioned and not replied_to_bot and not triggered:
+            await add_message(
+                chat_id=chat_id, role="user",
+                content=message.text,
+                user_id=message.from_user.id,
+                user_name=message.from_user.full_name,
+            )
+            return
 
-        if bot_info.username:
-
-            text = text.replace(
-                f"@{bot_info.username}",
-                "",
-            ).strip()
-
+        text = clean_trigger(message.text, bot_info.username)
     else:
-
         text = message.text
 
-    # =====================================
-    # AI PROCESSING
-    # =====================================
+    # ═══════════════════════════════
+    # SAVE & PROCESS
+    # ═══════════════════════════════
+    await add_message(
+        chat_id=chat_id, role="user", content=text,
+        user_id=message.from_user.id,
+        user_name=message.from_user.full_name,
+    )
+
+    context = await build_context(message)
+
+    typing = TypingManager(message.bot, chat_id)
+    await typing.start()
 
     try:
+        async def tool_executor(name, args):
+            return await execute_tool(
+                bot=message.bot, message=message,
+                tool_name=name, args=args,
+            )
 
-        decision = await ai.decide(
+        response = await ai.chat(
             text=text,
             context=context,
+            chat_id=chat_id,
+            execute_tool_fn=tool_executor,
         )
 
-        # =================================
-        # NORMAL CHAT
-        # =================================
+        # Save AI response to history
+        await add_message(
+            chat_id=chat_id, role="assistant", content=response,
+        )
 
-        if decision["type"] == "text":
-
-            response = escape_html(
-                decision["text"]
-            )
-
-            await message.answer(
-                response,
-                parse_mode="HTML",
-            )
-
-            return
-
-        # =================================
-        # TOOL CALL
-        # =================================
-
-        results = []
-
-        for call in decision["calls"]:
-
-            tool_name = call["name"]
-
-            args = call.get(
-                "args",
-                {},
-            )
-
-            # -----------------------------
-            # REPLY TARGET
-            # -----------------------------
-
-            target_tools = [
-                "promote_user",
-                "demote_user",
-                "ban_user",
-                "unban_user",
-                "mute_user",
-                "unmute_user",
-            ]
-
-            if (
-                "user_id" not in args
-                and context.get("reply")
-                and context["reply"].get("user")
-                and tool_name in target_tools
-            ):
-
-                args["user_id"] = (
-                    context["reply"]
-                    ["user"]
-                    ["id"]
+        # Send response (split if too long)
+        if response:
+            if len(response) > 4000:
+                for i in range(0, len(response), 4000):
+                    chunk = response[i : i + 4000]
+                    await message.answer(
+                        escape_html(chunk), parse_mode="HTML",
+                    )
+            else:
+                await message.answer(
+                    escape_html(response), parse_mode="HTML",
                 )
-
-            # -----------------------------
-            # DELETE REPLY TARGET
-            # -----------------------------
-
-            if (
-                tool_name == "delete_message"
-                and "message_id" not in args
-                and context.get("reply")
-            ):
-
-                args["message_id"] = (
-                    context["reply"]
-                    ["message_id"]
-                )
-
-            # -----------------------------
-            # EXECUTE
-            # -----------------------------
-
-            print(
-                f"[TOOL] {tool_name} "
-                f"ARGS={args}",
-                flush=True,
-            )
-
-            result = await execute_tool(
-                bot=message.bot,
-                message=message,
-                tool_name=tool_name,
-                args=args,
-            )
-
-            print(
-                f"[TOOL RESULT] {result}",
-                flush=True,
-            )
-
-            results.append({
-                "tool": tool_name,
-                "args": args,
-                "result": result,
-            })
-
-        # =================================
-        # FINAL RESPONSE
-        # =================================
-
-        final = await ai.final_response(
-            text=text,
-            context=context,
-            results=results,
-        )
-
-        await message.answer(
-            escape_html(final),
-            parse_mode="HTML",
-        )
 
     except Exception as e:
-
-        print(
-            "\n==============================",
-            flush=True,
-        )
-
-        print(
-            "AI ERROR",
-            flush=True,
-        )
-
-        print(
-            f"TYPE: {type(e).__name__}",
-            flush=True,
-        )
-
-        print(
-            f"MESSAGE: {e}",
-            flush=True,
-        )
-
+        print(f"\n{'=' * 40}", flush=True)
+        print("AI ERROR", flush=True)
+        print(f"TYPE: {type(e).__name__}", flush=True)
+        print(f"MESSAGE: {e}", flush=True)
         traceback.print_exc()
-
-        print(
-            "==============================\n",
-            flush=True,
-        )
-
+        print(f"{'=' * 40}\n", flush=True)
         await message.answer(
-            "⚠️ Ada error waktu menjalankan "
-            "perintah.",
+            "\u26a0\ufe0f Ada error waktu menjalankan perintah.",
         )
+    finally:
+        await typing.stop()
 
+
+# ──────────────────────────────────────
+# Main
+# ──────────────────────────────────────
 
 async def main():
-
     if not BOT_TOKEN:
-
-        raise RuntimeError(
-            "BOT_TOKEN belum ditemukan."
-        )
-
+        raise RuntimeError("BOT_TOKEN belum ditemukan.")
     if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY belum ditemukan.")
 
-        raise RuntimeError(
-            "GROQ_API_KEY belum ditemukan."
-        )
+    await init_db()
 
-    bot = Bot(
-        token=BOT_TOKEN,
-    )
-
-    print(
-        "🤖 Idol AI Group Assistant berjalan...",
-        flush=True,
-    )
-
-    await dp.start_polling(
-        bot
-    )
+    bot = Bot(token=BOT_TOKEN)
+    print("\U0001f916 Idol AI Group Assistant berjalan...", flush=True)
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-
-    asyncio.run(
-        main()
-    )
+    asyncio.run(main())
