@@ -62,6 +62,34 @@ ai = AIAgent(GROQ_API_KEY)
 
 
 # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# Admin check
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+async def check_bot_admin(bot: Bot, chat_id: int) -> bool:
+    """Check if bot is admin in a group. Returns True if admin."""
+    try:
+        me = await bot.get_me()
+        member = await bot.get_chat_member(chat_id=chat_id, user_id=me.id)
+        return member.status in ["administrator", "creator"]
+    except Exception:
+        return False
+
+
+async def warn_not_admin(bot: Bot, chat_id: int):
+    """Send a warning that bot is not admin."""
+    await bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "\u26a0\ufe0f <b>Idol belum jadi admin di group ini.</b>\n\n"
+            "Tanpa admin, Idol ga bisa kelola group "
+            "(ban, mute, pin, hapus pesan, dll).\n\n"
+            "Jadiin Idol sebagai admin dulu ya biar bisa kerja maksimal! \U0001f64f"
+        ),
+        parse_mode="HTML",
+    )
+
+
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # Helpers
 # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
@@ -82,6 +110,31 @@ def sanitize_html(text: str) -> str:
     return _re.sub(r'<[^>]+>', _check, text)
 
 
+# Permission denied messages \u2014 natural, context-specific
+PERM_MESSAGES = {
+    "promote_user": "Lu bukan admin yang bisa angkat admin, ga bisa bre.",
+    "demote_user": "Lu ga punya hak buat cabut admin orang, minta yang punya akses.",
+    "ban_user": "Cuma admin yang bisa ban orang. Lu bukan admin bre.",
+    "unban_user": "Unban cuma bisa dilakuin admin, lu belum jadi admin.",
+    "mute_user": "Lu ga bisa mute orang kalo bukan admin.",
+    "unmute_user": "Unmute cuma bisa admin yang lakuin.",
+    "delete_message": "Hapus pesan cuma bisa admin bre, lu belum.",
+    "pin_message": "Pin pesan butuh hak admin, lu belum punya.",
+    "unpin_message": "Unpin cuma bisa dilakuin admin.",
+    "set_chat_title": "Ganti judul group cuma admin yang bisa.",
+    "set_chat_description": "Ganti deskripsi group butuh akses admin.",
+    "create_invite_link": "Bikin link invite butuh hak admin.",
+    "create_voice_chat": "Buka voice chat butuh admin yang punya akses manage video chat.",
+    "end_voice_chat": "Tutup voice chat butuh admin yang punya akses manage video chat.",
+    "set_slow_mode": "Atur slow mode cuma bisa admin.",
+    "toggle_strict_mode": "Mode tegas cuma bisa diatur owner bot dan admin Idol aja.",
+    "toggle_chat_mode": "Mode ngobrol cuma bisa diatur owner bot dan admin Idol aja.",
+    "toggle_nimbrung": "Mode nimbrung cuma bisa diatur owner bot dan admin Idol aja.",
+}
+
+DEFAULT_PERM_MSG = "Lu ga punya permission buat lakuin ini bre."
+
+
 async def execute_tool(
     bot: Bot,
     message: Message,
@@ -100,59 +153,36 @@ async def execute_tool(
         return await get_member_count(bot=bot, chat_id=chat_id)
 
     # \u2500\u2500 Settings tools (bot admin-only) \u2500\u2500
-    if tool_name == "toggle_strict_mode":
-        allowed = await can_manage(
-            bot=bot, chat_id=chat_id,
-            user_id=user_id, action="toggle_strict_mode",
-        )
-        if not allowed:
-            return {"success": False, "error": "PERMISSION_DENIED. Hanya owner bot dan admin Idol yang bisa."}
-        enabled = args.get("enabled", False)
-        await set_strict_mode(chat_id, enabled)
-        return {"success": True, "strict_mode": enabled}
-
-    if tool_name == "toggle_chat_mode":
-        allowed = await can_manage(
-            bot=bot, chat_id=chat_id,
-            user_id=user_id, action="toggle_chat_mode",
-        )
-        if not allowed:
-            return {"success": False, "error": "PERMISSION_DENIED. Hanya owner bot dan admin Idol yang bisa."}
-        enabled = args.get("enabled", False)
-        await set_chat_mode(chat_id, enabled)
-        if not enabled:
-            await end_conversation(chat_id)
-        return {"success": True, "chat_mode": enabled}
-
-    if tool_name == "toggle_nimbrung":
-        allowed = await can_manage(
-            bot=bot, chat_id=chat_id,
-            user_id=user_id, action="toggle_nimbrung",
-        )
-        if not allowed:
-            return {"success": False, "error": "PERMISSION_DENIED. Hanya owner bot dan admin Idol yang bisa."}
-        enabled = args.get("enabled", False)
-        await set_nimbrung_mode(chat_id, enabled)
-        return {"success": True, "nimbrung_mode": enabled}
+    for mode_tool in ["toggle_strict_mode", "toggle_chat_mode", "toggle_nimbrung"]:
+        if tool_name == mode_tool:
+            allowed = await can_manage(bot=bot, chat_id=chat_id, user_id=user_id, action=mode_tool)
+            if not allowed:
+                return {"success": False, "error": PERM_MESSAGES.get(mode_tool, DEFAULT_PERM_MSG)}
+            enabled = args.get("enabled", False)
+            if mode_tool == "toggle_strict_mode":
+                await set_strict_mode(chat_id, enabled)
+                return {"success": True, "strict_mode": enabled}
+            elif mode_tool == "toggle_chat_mode":
+                await set_chat_mode(chat_id, enabled)
+                if not enabled:
+                    await end_conversation(chat_id)
+                return {"success": True, "chat_mode": enabled}
+            elif mode_tool == "toggle_nimbrung":
+                await set_nimbrung_mode(chat_id, enabled)
+                return {"success": True, "nimbrung_mode": enabled}
 
     # \u2500\u2500 Warning tools \u2500\u2500
     if tool_name == "warn_user":
         target_id = args.get("user_id")
         if not target_id:
-            return {"success": False, "error": "Missing user_id"}
+            return {"success": False, "error": "Reply ke pesan orangnya dulu biar gua tau siapa yang mau di-warn."}
         reason = args.get("reason", "Pelanggaran aturan group")
         count = await add_warning(chat_id, target_id, reason)
-        result = {
-            "success": True, "user_id": target_id,
-            "warning_count": count, "reason": reason,
-        }
+        result = {"success": True, "user_id": target_id, "warning_count": count, "reason": reason}
         if count >= 3:
             duration = 10 if count < 5 else 60
             try:
-                await mute_user(
-                    bot=bot, chat_id=chat_id,
-                    user_id=target_id, duration_minutes=duration,
-                )
+                await mute_user(bot=bot, chat_id=chat_id, user_id=target_id, duration_minutes=duration)
                 result["auto_muted"] = True
                 result["mute_duration_minutes"] = duration
             except Exception:
@@ -162,42 +192,36 @@ async def execute_tool(
     if tool_name == "get_warnings":
         target_id = args.get("user_id")
         if not target_id:
-            return {"success": False, "error": "Missing user_id"}
+            return {"success": False, "error": "Reply ke pesan orangnya biar gua bisa cek warning-nya."}
         count = await get_count(chat_id, target_id)
         return {"success": True, "user_id": target_id, "warning_count": count}
 
     if tool_name == "reset_warnings":
         target_id = args.get("user_id")
         if not target_id:
-            return {"success": False, "error": "Missing user_id"}
+            return {"success": False, "error": "Reply ke pesan orangnya biar gua bisa reset warning-nya."}
         await reset(chat_id, target_id)
         return {"success": True, "user_id": target_id, "warnings_reset": True}
 
     # \u2500\u2500 Voice chat tools \u2500\u2500
     if tool_name == "create_voice_chat":
-        allowed = await can_manage(
-            bot=bot, chat_id=chat_id,
-            user_id=user_id, action="create_voice_chat",
-        )
+        allowed = await can_manage(bot=bot, chat_id=chat_id, user_id=user_id, action="create_voice_chat")
         if not allowed:
-            return {"success": False, "error": "PERMISSION_DENIED"}
+            return {"success": False, "error": PERM_MESSAGES["create_voice_chat"]}
         title = args.get("title")
         try:
             return await create_voice_chat(bot=bot, chat_id=chat_id, title=title)
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": f"Gagal buka voice chat: {e}"}
 
     if tool_name == "end_voice_chat":
-        allowed = await can_manage(
-            bot=bot, chat_id=chat_id,
-            user_id=user_id, action="end_voice_chat",
-        )
+        allowed = await can_manage(bot=bot, chat_id=chat_id, user_id=user_id, action="end_voice_chat")
         if not allowed:
-            return {"success": False, "error": "PERMISSION_DENIED"}
+            return {"success": False, "error": PERM_MESSAGES["end_voice_chat"]}
         try:
             return await end_voice_chat(bot=bot, chat_id=chat_id, voice_chat_id=0)
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": f"Gagal tutup voice chat: {e}"}
 
     # \u2500\u2500 Poll tool \u2500\u2500
     if tool_name == "create_poll":
@@ -205,58 +229,53 @@ async def execute_tool(
         options = args.get("options", [])
         is_anonymous = args.get("is_anonymous", True)
         if len(options) < 2:
-            return {"success": False, "error": "Minimal 2 pilihan."}
+            return {"success": False, "error": "Polling minimal harus punya 2 pilihan bre."}
         try:
-            return await create_poll(
-                bot=bot, chat_id=chat_id, question=question,
-                options=options, is_anonymous=is_anonymous,
-            )
+            return await create_poll(bot=bot, chat_id=chat_id, question=question, options=options, is_anonymous=is_anonymous)
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": f"Gagal bikin polling: {e}"}
 
     # \u2500\u2500 Slow mode tool \u2500\u2500
     if tool_name == "set_slow_mode":
-        allowed = await can_manage(
-            bot=bot, chat_id=chat_id,
-            user_id=user_id, action="set_slow_mode",
-        )
+        allowed = await can_manage(bot=bot, chat_id=chat_id, user_id=user_id, action="set_slow_mode")
         if not allowed:
-            return {"success": False, "error": "PERMISSION_DENIED"}
+            return {"success": False, "error": PERM_MESSAGES["set_slow_mode"]}
         seconds = args.get("seconds", 0)
         try:
             return await set_slow_mode(bot=bot, chat_id=chat_id, seconds=seconds)
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": f"Gagal atur slow mode: {e}"}
 
     # \u2500\u2500 Permission check for management tools \u2500\u2500
-    allowed = await can_manage(
-        bot=bot, chat_id=chat_id,
-        user_id=user_id, action=tool_name,
-    )
+    allowed = await can_manage(bot=bot, chat_id=chat_id, user_id=user_id, action=tool_name)
     if not allowed:
         return {
-            "success": False, "error": "PERMISSION_DENIED",
-            "message": "User tidak punya permission yang cukup.",
+            "success": False,
+            "error": PERM_MESSAGES.get(tool_name, DEFAULT_PERM_MSG),
+        }
+
+    # \u2500\u2500 Check if bot itself is admin (needed for management) \u2500\u2500
+    bot_is_admin = await check_bot_admin(bot, chat_id)
+    if not bot_is_admin:
+        return {
+            "success": False,
+            "error": "Idol belum jadi admin di group ini. Jadiin admin dulu biar bisa jalanin perintah ini.",
         }
 
     # \u2500\u2500 Auto-fill user_id from reply target \u2500\u2500
-    target_tools = [
-        "promote_user", "demote_user",
-        "ban_user", "unban_user",
-        "mute_user", "unmute_user",
-    ]
+    target_tools = ["promote_user", "demote_user", "ban_user", "unban_user", "mute_user", "unmute_user"]
     if tool_name in target_tools and "user_id" not in args:
         if message.reply_to_message and message.reply_to_message.from_user:
             args["user_id"] = message.reply_to_message.from_user.id
         else:
-            return {"success": False, "error": "Missing user_id. Reply ke pesan user target."}
+            return {"success": False, "error": "Reply ke pesan orangnya dulu biar gua tau siapa targetnya."}
 
     # \u2500\u2500 Auto-fill message_id from reply target \u2500\u2500
     if tool_name in ["delete_message", "pin_message"] and "message_id" not in args:
         if message.reply_to_message:
             args["message_id"] = message.reply_to_message.message_id
         else:
-            return {"success": False, "error": "Missing message_id. Reply ke pesan target."}
+            return {"success": False, "error": "Reply ke pesan yang mau di-" + ("hapus" if tool_name == "delete_message" else "pin") + " dulu."}
 
     # \u2500\u2500 Execute management tool \u2500\u2500
     try:
@@ -278,9 +297,9 @@ async def execute_tool(
         if fn:
             return await fn()
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": f"Gagal jalanin: {e}"}
 
-    return {"success": False, "error": "UNKNOWN_TOOL"}
+    return {"success": False, "error": "Gua ga kenal perintah ini bre."}
 
 
 # \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -301,7 +320,24 @@ async def start_handler(message: Message):
 
 @dp.message(F.new_chat_members)
 async def welcome_handler(message: Message):
+    bot_info = await message.bot.get_me()
+
     for user in message.new_chat_members:
+        # Bot itself was added to a group
+        if user.id == bot_info.id:
+            is_admin = await check_bot_admin(message.bot, message.chat.id)
+            if not is_admin:
+                await warn_not_admin(message.bot, message.chat.id)
+            else:
+                await message.answer(
+                    "\U0001f916 <b>Idol AI siap bertugas!</b>\n\n"
+                    "Panggil \u201cidol\u201d atau reply pesan Idol buat mulai.\n"
+                    "Developer: <a href=\"https://t.me/nathanidol\">Nathan Idol</a>",
+                    parse_mode="HTML",
+                )
+            return
+
+        # Regular user joined
         if user.is_bot:
             continue
         name = user.full_name or "User"
@@ -311,6 +347,12 @@ async def welcome_handler(message: Message):
             f"Salam kenal, ada yang bisa Idol bantu?",
             parse_mode="HTML",
         )
+
+
+# Detect when bot is promoted to admin
+@dp.message(F.new_chat_members == None)  # catch-all for chat_member updates
+async def on_my_chat_member(message: Message):
+    pass  # Placeholder, aiogram handles this differently
 
 
 @dp.message()
@@ -376,13 +418,11 @@ async def message_handler(message: Message):
         # \u2500\u2500 Check if bot should respond \u2500\u2500
         should_reply = mentioned or replied_to_bot or triggered
 
-        # Check active conversation
         if not should_reply:
             conv_active = await is_conversation_active(chat_id)
             if conv_active:
                 should_reply = True
 
-        # Check nimbrung mode (proactive)
         if not should_reply:
             nimbrung_on = await get_nimbrung_mode(chat_id)
             if nimbrung_on:
@@ -454,6 +494,32 @@ async def message_handler(message: Message):
         await typing.stop()
 
 
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# Main
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+async def startup_admin_check(bot: Bot):
+    """Check bot admin status in all known groups on startup."""
+    from app.storage.database import get_db
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT chat_id FROM group_settings")
+        rows = await cursor.fetchall()
+        for row in rows:
+            chat_id = row[0]
+            try:
+                is_admin = await check_bot_admin(bot, chat_id)
+                if not is_admin:
+                    await warn_not_admin(bot, chat_id)
+                    print(f"[WARN] Bot is NOT admin in chat {chat_id}", flush=True)
+                else:
+                    print(f"[OK] Bot is admin in chat {chat_id}", flush=True)
+            except Exception as e:
+                print(f"[SKIP] Could not check chat {chat_id}: {e}", flush=True)
+    finally:
+        await db.close()
+
+
 async def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN belum ditemukan.")
@@ -463,6 +529,10 @@ async def main():
     await init_db()
 
     bot = Bot(token=BOT_TOKEN)
+
+    # Check admin status in all known groups
+    await startup_admin_check(bot)
+
     print("\U0001f916 Idol AI Group Assistant berjalan...", flush=True)
     await dp.start_polling(bot)
 

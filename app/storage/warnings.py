@@ -30,7 +30,7 @@ async def add_warning(
             (chat_id, user_id, cutoff),
         )
         row = await cursor.fetchone()
-        return row[0]
+        return row[0] if row else 1
     finally:
         await db.close()
 
@@ -45,12 +45,13 @@ async def get_count(chat_id: int, user_id: int) -> int:
             (chat_id, user_id, cutoff),
         )
         row = await cursor.fetchone()
-        return row[0]
+        return row[0] if row else 0
     finally:
         await db.close()
 
 
 async def reset(chat_id: int, user_id: int):
+    """Reset all warnings for a user in a chat."""
     db = await get_db()
     try:
         await db.execute(
