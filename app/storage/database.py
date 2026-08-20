@@ -47,7 +47,15 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS group_settings (
                 chat_id INTEGER PRIMARY KEY,
                 strict_mode INTEGER DEFAULT 0,
+                chat_mode INTEGER DEFAULT 0,
                 welcome_msg TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS active_conversations (
+                chat_id INTEGER PRIMARY KEY,
+                last_active REAL NOT NULL,
+                topic_hint TEXT
             )
         """)
         await db.commit()

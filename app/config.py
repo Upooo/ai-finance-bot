@@ -13,7 +13,33 @@ BOT_NAMES = ["idol", "asisten", "assistant", "bot", "babu"]
 MAX_HISTORY = 20
 
 # AI Model on Groq
-AI_MODEL = "llama-3.3-70b-versatile"
+AI_MODEL = "openai/gpt-oss-120b"
 
 # Database file path
 DB_PATH = os.getenv("DB_PATH", "data/idol.db")
+
+# Dismiss phrases — bot stops following conversation
+DISMISS_PHRASES = [
+    "ga ngomong sama lu",
+    "gak ngomong sama lo",
+    "ga ngomong sama lo",
+    "gak ngomong sama lu",
+    "bukan sama lu",
+    "bukan sama lo",
+    "diem lu",
+    "diem lo",
+    "diam kamu",
+    "diam lu",
+    "diam lo",
+    "udah diem",
+    "udah diam",
+    "stop bot",
+    "berhenti bot",
+    "minggir bot",
+    "pergi lu",
+    "pergi lo",
+    "ga nanya lu",
+    "gak nanya lo",
+    "siapa yang nanya",
+    "siapa nanya",
+]

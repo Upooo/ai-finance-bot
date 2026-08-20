@@ -1,5 +1,7 @@
 import asyncio
+import json
 import os
+import re
 import traceback
 
 from aiogram import Bot, Dispatcher, F
@@ -9,7 +11,7 @@ from dotenv import load_dotenv
 
 from app.ai.agent import AIAgent
 from app.telegram.context import build_context
-from app.telegram.triggers import should_respond, clean_trigger
+from app.telegram.triggers import should_respond, clean_trigger, is_dismiss
 from app.telegram.typing import TypingManager
 from app.telegram.permissions import can_manage
 
@@ -19,7 +21,11 @@ from app.storage.warnings import (
     add_warning,
     get_count,
 )
-from app.storage.settings import get_strict_mode, set_strict_mode
+from app.storage.settings import (
+    get_strict_mode, set_strict_mode,
+    get_chat_mode, set_chat_mode,
+    mark_active, is_conversation_active, end_conversation,
+)
 
 from app.telegram.management import (
     get_group_info,
@@ -48,9 +54,9 @@ dp = Dispatcher()
 ai = AIAgent(GROQ_API_KEY)
 
 
-# ──────────────────────────────────────
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # Helpers
-# ──────────────────────────────────────
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 def escape_html(text: str) -> str:
     if not text:
@@ -72,13 +78,13 @@ async def execute_tool(
     chat_id = message.chat.id
     user_id = message.from_user.id
 
-    # ── Read-only tools ──
+    # \u2500\u2500 Read-only tools \u2500\u2500
     if tool_name == "get_group_info":
         return await get_group_info(bot=bot, chat_id=chat_id)
     if tool_name == "get_group_admins":
         return await get_group_admins(bot=bot, chat_id=chat_id)
 
-    # ── Settings tools (admin-only) ──
+    # \u2500\u2500 Settings tools (admin-only) \u2500\u2500
     if tool_name == "toggle_strict_mode":
         allowed = await can_manage(
             bot=bot, chat_id=chat_id,
@@ -90,7 +96,20 @@ async def execute_tool(
         await set_strict_mode(chat_id, enabled)
         return {"success": True, "strict_mode": enabled}
 
-    # ── Warning tools ──
+    if tool_name == "toggle_chat_mode":
+        allowed = await can_manage(
+            bot=bot, chat_id=chat_id,
+            user_id=user_id, action="toggle_chat_mode",
+        )
+        if not allowed:
+            return {"success": False, "error": "PERMISSION_DENIED"}
+        enabled = args.get("enabled", False)
+        await set_chat_mode(chat_id, enabled)
+        if not enabled:
+            await end_conversation(chat_id)
+        return {"success": True, "chat_mode": enabled}
+
+    # \u2500\u2500 Warning tools \u2500\u2500
     if tool_name == "warn_user":
         target_id = args.get("user_id")
         if not target_id:
@@ -128,7 +147,7 @@ async def execute_tool(
             "warning_count": count,
         }
 
-    # ── Permission check for management tools ──
+    # \u2500\u2500 Permission check for management tools \u2500\u2500
     allowed = await can_manage(
         bot=bot, chat_id=chat_id,
         user_id=user_id, action=tool_name,
@@ -140,7 +159,7 @@ async def execute_tool(
             "message": "User tidak punya permission yang cukup.",
         }
 
-    # ── Auto-fill user_id from reply target ──
+    # \u2500\u2500 Auto-fill user_id from reply target \u2500\u2500
     target_tools = [
         "promote_user", "demote_user",
         "ban_user", "unban_user",
@@ -158,7 +177,7 @@ async def execute_tool(
                 "error": "Missing user_id. Reply ke pesan user target.",
             }
 
-    # ── Auto-fill message_id from reply target ──
+    # \u2500\u2500 Auto-fill message_id from reply target \u2500\u2500
     if tool_name == "delete_message" and "message_id" not in args:
         if message.reply_to_message:
             args["message_id"] = message.reply_to_message.message_id
@@ -176,7 +195,7 @@ async def execute_tool(
                 "error": "Missing message_id. Reply ke pesan yang mau di-pin.",
             }
 
-    # ── Execute management tool ──
+    # \u2500\u2500 Execute management tool \u2500\u2500
     try:
         dispatch = {
             "promote_user": lambda: promote_user(
@@ -228,9 +247,9 @@ async def execute_tool(
     return {"success": False, "error": "UNKNOWN_TOOL"}
 
 
-# ──────────────────────────────────────
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # Handlers
-# ──────────────────────────────────────
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 @dp.message(CommandStart())
 async def start_handler(message: Message):
@@ -265,9 +284,9 @@ async def message_handler(message: Message):
     chat_id = message.chat.id
     is_group = message.chat.type in ["group", "supergroup"]
 
-    # ═══════════════════════════════
+    # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
     # GROUP FILTER
-    # ═══════════════════════════════
+    # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
     if is_group:
         mentioned = False
         if bot_info.username:
@@ -284,7 +303,18 @@ async def message_handler(message: Message):
 
         triggered = should_respond(message.text, bot_info.username)
 
-        # ── Moderation (strict mode) ──
+        # \u2500\u2500 Check dismiss \u2500\u2500
+        if is_dismiss(message.text):
+            await end_conversation(chat_id)
+            await add_message(
+                chat_id=chat_id, role="user",
+                content=message.text,
+                user_id=message.from_user.id,
+                user_name=message.from_user.full_name,
+            )
+            return  # Bot stays silent
+
+        # \u2500\u2500 Moderation (strict mode) \u2500\u2500
         strict = await get_strict_mode(chat_id)
         if strict and not mentioned and not replied_to_bot and not triggered:
             mod = await ai.check_moderation(message.text)
@@ -329,6 +359,33 @@ async def message_handler(message: Message):
                         pass
                 await message.answer(warning)
 
+                await add_message(
+                    chat_id=chat_id, role="user",
+                    content=message.text,
+                    user_id=message.from_user.id,
+                    user_name=message.from_user.full_name,
+                )
+                return
+
+        # \u2500\u2500 Check if bot should respond \u2500\u2500
+        should_reply = mentioned or replied_to_bot or triggered
+
+        # Check active conversation (bot already engaged)
+        if not should_reply:
+            conv_active = await is_conversation_active(chat_id)
+            if conv_active:
+                should_reply = True  # Bot stays in conversation
+
+        # Check chat mode (proactive nimbrung)
+        if not should_reply:
+            chat_mode_on = await get_chat_mode(chat_id)
+            if chat_mode_on:
+                # Ask AI if it should join this conversation
+                mod_result = await ai.check_should_join(message.text)
+                if mod_result.get("should_join", False):
+                    should_reply = True
+
+        if not should_reply:
             # Save to history but don't respond
             await add_message(
                 chat_id=chat_id, role="user",
@@ -338,23 +395,16 @@ async def message_handler(message: Message):
             )
             return
 
-        # Not addressed → save history, don't respond
-        if not mentioned and not replied_to_bot and not triggered:
-            await add_message(
-                chat_id=chat_id, role="user",
-                content=message.text,
-                user_id=message.from_user.id,
-                user_name=message.from_user.full_name,
-            )
-            return
-
         text = clean_trigger(message.text, bot_info.username)
+
+        # Mark conversation as active
+        await mark_active(chat_id, topic_hint=text[:100])
     else:
         text = message.text
 
-    # ═══════════════════════════════
+    # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
     # SAVE & PROCESS
-    # ═══════════════════════════════
+    # \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
     await add_message(
         chat_id=chat_id, role="user", content=text,
         user_id=message.from_user.id,
@@ -385,6 +435,10 @@ async def message_handler(message: Message):
             chat_id=chat_id, role="assistant", content=response,
         )
 
+        # Refresh active conversation timer
+        if is_group:
+            await mark_active(chat_id, topic_hint=text[:100])
+
         # Send response (split if too long)
         if response:
             if len(response) > 4000:
@@ -412,9 +466,9 @@ async def message_handler(message: Message):
         await typing.stop()
 
 
-# ──────────────────────────────────────
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 # Main
-# ──────────────────────────────────────
+# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 async def main():
     if not BOT_TOKEN:

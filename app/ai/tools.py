@@ -26,7 +26,7 @@ TOOLS = [
                     "user_id": {
                         "type": "integer",
                         "description": "Telegram user ID target.",
-                    }
+                    },
                 },
                 "required": ["user_id"],
             },
@@ -36,11 +36,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "demote_user",
-            "description": "Hapus status admin user.",
+            "description": "Cabut admin user dari group.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "integer"}
+                    "user_id": {
+                        "type": "integer",
+                        "description": "Telegram user ID target.",
+                    },
                 },
                 "required": ["user_id"],
             },
@@ -54,7 +57,10 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "integer"}
+                    "user_id": {
+                        "type": "integer",
+                        "description": "Telegram user ID target.",
+                    },
                 },
                 "required": ["user_id"],
             },
@@ -64,11 +70,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "unban_user",
-            "description": "Buka ban user.",
+            "description": "Unban user dari group.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "integer"}
+                    "user_id": {
+                        "type": "integer",
+                        "description": "Telegram user ID target.",
+                    },
                 },
                 "required": ["user_id"],
             },
@@ -78,14 +87,17 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "mute_user",
-            "description": "Mute user sehingga tidak bisa kirim pesan.",
+            "description": "Mute user di group. Bisa set durasi dalam menit.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "integer"},
+                    "user_id": {
+                        "type": "integer",
+                        "description": "Telegram user ID target.",
+                    },
                     "duration_minutes": {
                         "type": "integer",
-                        "description": "Durasi mute dalam menit. Default 10.",
+                        "description": "Durasi mute dalam menit (default 10).",
                     },
                 },
                 "required": ["user_id"],
@@ -96,11 +108,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "unmute_user",
-            "description": "Unmute user agar bisa kirim pesan lagi.",
+            "description": "Unmute user di group.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "integer"}
+                    "user_id": {
+                        "type": "integer",
+                        "description": "Telegram user ID target.",
+                    },
                 },
                 "required": ["user_id"],
             },
@@ -110,11 +125,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "delete_message",
-            "description": "Hapus pesan tertentu.",
+            "description": "Hapus pesan di group.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "message_id": {"type": "integer"}
+                    "message_id": {
+                        "type": "integer",
+                        "description": "ID pesan yang mau dihapus.",
+                    },
                 },
                 "required": ["message_id"],
             },
@@ -124,7 +142,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "create_invite_link",
-            "description": "Buat invite link group.",
+            "description": "Buat link undangan group.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -136,7 +154,10 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "message_id": {"type": "integer"}
+                    "message_id": {
+                        "type": "integer",
+                        "description": "ID pesan yang mau di-pin.",
+                    },
                 },
                 "required": ["message_id"],
             },
@@ -152,8 +173,8 @@ TOOLS = [
                 "properties": {
                     "message_id": {
                         "type": "integer",
-                        "description": "ID pesan. Kosongkan untuk unpin semua.",
-                    }
+                        "description": "ID pesan (opsional, kosong = unpin semua).",
+                    },
                 },
             },
         },
@@ -169,7 +190,7 @@ TOOLS = [
                     "title": {
                         "type": "string",
                         "description": "Judul baru group.",
-                    }
+                    },
                 },
                 "required": ["title"],
             },
@@ -185,8 +206,8 @@ TOOLS = [
                 "properties": {
                     "description": {
                         "type": "string",
-                        "description": "Deskripsi baru.",
-                    }
+                        "description": "Deskripsi baru group.",
+                    },
                 },
                 "required": ["description"],
             },
@@ -196,11 +217,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "warn_user",
-            "description": "Beri warning ke user yang melanggar aturan.",
+            "description": "Kasih warning ke user yang melanggar aturan.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "integer"},
+                    "user_id": {
+                        "type": "integer",
+                        "description": "Telegram user ID target.",
+                    },
                     "reason": {
                         "type": "string",
                         "description": "Alasan warning.",
@@ -214,11 +238,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_warnings",
-            "description": "Cek jumlah warning user (24 jam terakhir).",
+            "description": "Cek jumlah warning user dalam 24 jam terakhir.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "user_id": {"type": "integer"}
+                    "user_id": {
+                        "type": "integer",
+                        "description": "Telegram user ID target.",
+                    },
                 },
                 "required": ["user_id"],
             },
@@ -228,14 +255,31 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "toggle_strict_mode",
-            "description": "Aktifkan/nonaktifkan mode tegas (moderasi otomatis group).",
+            "description": "Aktifkan/matikan mode tegas (moderasi otomatis).",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "enabled": {
                         "type": "boolean",
                         "description": "true = aktif, false = nonaktif.",
-                    }
+                    },
+                },
+                "required": ["enabled"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "toggle_chat_mode",
+            "description": "Aktifkan/matikan mode ngobrol (bot ikut nimbrung di group).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "enabled": {
+                        "type": "boolean",
+                        "description": "true = aktif, false = nonaktif.",
+                    },
                 },
                 "required": ["enabled"],
             },

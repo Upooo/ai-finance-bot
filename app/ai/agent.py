@@ -7,6 +7,7 @@ from app.ai.prompts import (
     PRIVATE_PROMPT,
     GROUP_PROMPT,
     MODERATION_CHECK_PROMPT,
+    CHAT_MODE_CHECK_PROMPT,
 )
 from app.ai.tools import TOOLS
 from app.storage.memory import get_history
@@ -45,7 +46,7 @@ class AIAgent:
         # Build messages array
         messages = [{"role": "system", "content": system_prompt}]
 
-        # Add history (skip last entry — it is the current message)
+        # Add history (skip last entry \u2014 it is the current message)
         for msg in history[:-1] if history else []:
             messages.append(msg)
 
@@ -79,7 +80,7 @@ class AIAgent:
             choice = response.choices[0]
             message = choice.message
 
-            # No tool calls → return text
+            # No tool calls \u2192 return text
             if not message.tool_calls:
                 return message.content or ""
 
@@ -150,7 +151,6 @@ class AIAgent:
                 max_tokens=150,
             )
             content = response.choices[0].message.content or "{}"
-            # Extract JSON from response
             match = re.search(r"\{.*\}", content, re.DOTALL)
             if match:
                 result = json.loads(match.group())
@@ -167,3 +167,29 @@ class AIAgent:
                 "confidence": 0.0,
                 "reason": "error",
             }
+
+    async def check_should_join(self, text: str) -> dict:
+        """Check if bot should proactively join a group conversation."""
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": CHAT_MODE_CHECK_PROMPT,
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Pesan group: {text}",
+                    },
+                ],
+                temperature=0.2,
+                max_tokens=100,
+            )
+            content = response.choices[0].message.content or "{}"
+            match = re.search(r"\{.*\}", content, re.DOTALL)
+            if match:
+                return json.loads(match.group())
+            return {"should_join": False}
+        except Exception:
+            return {"should_join": False}

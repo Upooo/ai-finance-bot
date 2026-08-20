@@ -1,7 +1,6 @@
 import re
 
-# Bot name variations (lowercase)
-BOT_NAMES = ["idol", "asisten", "assistant", "bot", "babu"]
+from app.config import BOT_NAMES, DISMISS_PHRASES
 
 # Words that signal the user is *addressing* the bot
 CALLING_WORDS = [
@@ -49,6 +48,27 @@ def should_respond(text: str, bot_username: str = None) -> bool:
     # 3+ words containing bot name -> likely addressing it
     if len(words) >= 3:
         return True
+
+    return False
+
+
+def is_dismiss(text: str) -> bool:
+    """Return True if the message is telling the bot to stop / go away."""
+    if not text:
+        return False
+    low = text.lower().strip()
+
+    # Check exact dismiss phrases
+    for phrase in DISMISS_PHRASES:
+        if phrase in low:
+            return True
+
+    # Check pattern: dismiss + bot name
+    # e.g. "ga ngomong sama lu bot idol"
+    for name in BOT_NAMES:
+        for phrase in DISMISS_PHRASES:
+            if phrase in low and name in low:
+                return True
 
     return False
 
